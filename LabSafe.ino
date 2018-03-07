@@ -113,20 +113,27 @@ void setup(void)
     Serial.println();
     Serial.println("Kerris Labsafe Version 1");
 
-    DEBUG_APP_PRINTLN("New debugging macro");
+    // TEMPERATURE
+    DEBUG_APP_PRINT("Locating temperature sensors...");
+    sensors.begin();
+    DEBUG_APP_PRINT("Found ");
+    DEBUG_APP_PRINT(sensors.getDeviceCount(), DEC);
+    DEBUG_APP_PRINTLN(" sensors.");
 
     // Setup flow rate timer
     timerSemaphore = xSemaphoreCreateBinary();
     timer = timerBegin(0, 80, true);
     timerAttachInterrupt(timer, &calculateFlowRate, true);
     timerAlarmWrite(timer, 1000000, true);
-    timerAlarmEnable(timer);
+    
 
     // Set Up temperature timer
     timer2Semaphore = xSemaphoreCreateBinary();
     timer2 = timerBegin(1, 80, true);
-    timerAttachInterrupt(timer2, &calculateTemp, true);
-    timerAlarmWrite(timer2, 1500000, true);
+    timerAttachInterrupt(timer2, &updateLcd, true);
+    timerAlarmWrite(timer2, 500000, true);
+
+    timerAlarmEnable(timer);
     timerAlarmEnable(timer2);
 
     // LED's and Siren
@@ -154,16 +161,7 @@ void setup(void)
     // Set up Siren
     ledcSetup(3, 3100, 8); // (Timer Channel, Base Frequency, Resolution)
     ledcAttachPin(12, 3);   // (Pin, Timer Channel)
-    ledcWrite(3, 0); // Turn siren
-
-    // TEMPERATURE
-    DEBUG_APP_PRINT("Locating temperature sensors...");
-    sensors.begin();
-    DEBUG_APP_PRINT("Found ");
-    DEBUG_APP_PRINT(sensors.getDeviceCount(), DEC);
-    DEBUG_APP_PRINTLN(" sensors.");
-
-    
+    ledcWrite(3, 0); // Turn siren    
 
     // FLOW
     // Set up the flow controller input
@@ -223,7 +221,7 @@ bool flashLEDState = true;
  */
 void loop()
 {
-    updateFlowRate(String(FlowRate));
+    // updateFlowRate(String(FlowRate));
     
     
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
@@ -307,9 +305,9 @@ void loop()
             // Set Temperature
             
   
-              portENTER_CRITICAL_ISR(&timer2Mux);
+              portENTER_CRITICAL_ISR(&timerMux);
                   Temp1Set = (float) RefreshedTemp1;
-              portEXIT_CRITICAL_ISR(&timer2Mux);
+              portEXIT_CRITICAL_ISR(&timerMux);
             
             Serial.print("Set Temperature is: ");
             Serial.print(Temp1Set);
@@ -340,7 +338,7 @@ void loop()
 
         while (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) < 2000) && ((currentTime - firstPress) > 500))
         {
-          updateFlowRate(String(FlowRate));
+          // updateFlowRate(String(FlowRate));
           
             if ((millis() - LastRefresh) > RefreshRate)
             {
@@ -353,9 +351,9 @@ void loop()
 //                Serial.print(RefreshedTemp1);
 //                Serial.println();
 
-                portENTER_CRITICAL_ISR(&timer2Mux);
+                portENTER_CRITICAL_ISR(&timerMux);
                   float temperature = (float) RefreshedTemp1;
-                portEXIT_CRITICAL_ISR(&timer2Mux);
+                portEXIT_CRITICAL_ISR(&timerMux);
 
                 // Checking if temp is within min/max
                 if  ((temperature < Temp1Min) || (temperature > Temp1Max))
@@ -413,7 +411,7 @@ void errorEvent()
 
     while (errorState)
     {
-        updateFlowRate(String(FlowRate));
+        // updateFlowRate(String(FlowRate));
         
         
         // Read button
@@ -476,6 +474,18 @@ void updateFlowRate(String value)
     swSer.write(0xff);
 }
 
+void updateTemperature(String value)
+{
+    swSer.write(0xff);
+    swSer.write(0xff);
+    swSer.write(0xff);
+    // Serial1.print("v1.txt=\"52\"");
+    swSer.print("v1.txt=\""+value+"\"");
+    swSer.write(0xff);
+    swSer.write(0xff);
+    swSer.write(0xff);
+}
+
 
 
 /**
@@ -494,6 +504,25 @@ void flowSensorHandler()
 }
 
 
+void IRAM_ATTR updateLcd()
+{
+      portENTER_CRITICAL_ISR(&timer2Mux);
+          // Update flow rate
+          double flowRate = FlowRate;
+          updateFlowRate(String(flowRate));
+
+          // Update temperature
+          double temperature = RefreshedTemp1;
+          updateTemperature(String(temperature));
+      portEXIT_CRITICAL_ISR(&timer2Mux);
+  
+    // Update temperature
+
+  xSemaphoreGiveFromISR(timer2Semaphore, NULL);
+
+
+}
+
 /**
  * Calculating flow rate, triggered every 1 second
  */
@@ -505,16 +534,11 @@ void IRAM_ATTR calculateFlowRate()
       flowSensorCount = 0;
       lastFlowRateSample = millis();
       FlowRate = (flowUnformatted / 60) * 1000;
+
+      // sensors.requestTemperatures();
+      //RefreshedTemp1 = (double) sensors.getTempCByIndex(0);
+      RefreshedTemp1 = (double) 200;
     portEXIT_CRITICAL_ISR(&timerMux);
     xSemaphoreGiveFromISR(timerSemaphore, NULL);
-}
-
-void IRAM_ATTR calculateTemp()
-{
-    portENTER_CRITICAL_ISR(&timer2Mux);
-      sensors.requestTemperatures();
-      RefreshedTemp1 = sensors.getTempCByIndex(0);
-    portEXIT_CRITICAL_ISR(&timer2Mux);
-    xSemaphoreGiveFromISR(timer2Semaphore, NULL);
 }
 
