@@ -34,9 +34,15 @@ hw_timer_t * timer = NULL;
 volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
+// LCD
 hw_timer_t * timer2 = NULL;
 volatile SemaphoreHandle_t timer2Semaphore;
 portMUX_TYPE timer2Mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Temperature
+hw_timer_t * timer3 = NULL;
+volatile SemaphoreHandle_t timer3Semaphore;
+portMUX_TYPE timer3Mux = portMUX_INITIALIZER_UNLOCKED;
 
 // FLOW
 volatile double FlowRate = 0;
@@ -106,6 +112,7 @@ void setup(void)
     swSer.begin(9600);
     
     updateFlowRate("Wait");
+    updateTemperature("Wait");
       
       
     //Start Serial Port
@@ -127,14 +134,21 @@ void setup(void)
     timerAlarmWrite(timer, 1000000, true);
     
 
-    // Set Up temperature timer
+    // Set up lcd timer
     timer2Semaphore = xSemaphoreCreateBinary();
     timer2 = timerBegin(1, 80, true);
     timerAttachInterrupt(timer2, &updateLcd, true);
     timerAlarmWrite(timer2, 500000, true);
 
+    // Set up temperature
+    timer3Semaphore = xSemaphoreCreateBinary();
+    timer3 = timerBegin(2, 80, true);
+    timerAttachInterrupt(timer3, &calculateTemperatures, true);
+    timerAlarmWrite(timer3, 200000, true);
+
     timerAlarmEnable(timer);
     timerAlarmEnable(timer2);
+    timerAlarmEnable(timer3);
 
     // LED's and Siren
     //Set pin mode
@@ -508,19 +522,30 @@ void IRAM_ATTR updateLcd()
 {
       portENTER_CRITICAL_ISR(&timer2Mux);
           // Update flow rate
-          double flowRate = FlowRate;
-          updateFlowRate(String(flowRate));
+          portENTER_CRITICAL_ISR(&timerMux);
+            double flowRate = FlowRate;
+            updateFlowRate(String(flowRate));
+          portEXIT_CRITICAL_ISR(&timerMux);
 
           // Update temperature
-          double temperature = RefreshedTemp1;
-          updateTemperature(String(temperature));
+          portENTER_CRITICAL_ISR(&timer3Mux);
+            double temperature = RefreshedTemp1;
+            updateTemperature(String(temperature));
+          portEXIT_CRITICAL_ISR(&timer3Mux);
       portEXIT_CRITICAL_ISR(&timer2Mux);
-  
-    // Update temperature
 
   xSemaphoreGiveFromISR(timer2Semaphore, NULL);
+}
 
 
+void IRAM_ATTR calculateTemperatures()
+{
+    portENTER_CRITICAL_ISR(&timer3Mux);
+       //sensors.requestTemperatures();
+       //RefreshedTemp1 = (double) sensors.getTempCByIndex(0);
+      RefreshedTemp1 = (double) 200;
+    portEXIT_CRITICAL_ISR(&timer3Mux);
+    xSemaphoreGiveFromISR(timer3Semaphore, NULL);
 }
 
 /**
@@ -534,10 +559,6 @@ void IRAM_ATTR calculateFlowRate()
       flowSensorCount = 0;
       lastFlowRateSample = millis();
       FlowRate = (flowUnformatted / 60) * 1000;
-
-      // sensors.requestTemperatures();
-      //RefreshedTemp1 = (double) sensors.getTempCByIndex(0);
-      RefreshedTemp1 = (double) 200;
     portEXIT_CRITICAL_ISR(&timerMux);
     xSemaphoreGiveFromISR(timerSemaphore, NULL);
 }
