@@ -10,9 +10,6 @@
 #include "Adafruit_FONA.h"
 
 
-
-
-
 // TEMPERATURE
 //Temperature Data Wire plugged into 1022 (I2C SCL - Pin 36)
 #define ONE_WIRE_BUS 22
@@ -20,9 +17,7 @@
 OneWire oneWire(ONE_WIRE_BUS);
 //Pass OneWire reference to Dallas Temperature
 DallasTemperature sensors(&oneWire);
-//Assign Device Address ->for more than one you need unique address
-DeviceAddress Temp1Address;
-double RefreshedTemp1;
+volatile double RefreshedTemp1;
 
 float InitialTemp1;
 float Temp1Set;
@@ -120,12 +115,20 @@ void setup(void)
     Serial.println();
     Serial.println("Kerris Labsafe Version 1");
 
-    // TEMPERATURE
-    DEBUG_APP_PRINT("Locating temperature sensors...");
+    // Setup the temperature sensor library
     sensors.begin();
+    // Print the number of devices found
+    DEBUG_APP_PRINT("Locating temperature sensors...");
     DEBUG_APP_PRINT("Found ");
     DEBUG_APP_PRINT(sensors.getDeviceCount(), DEC);
     DEBUG_APP_PRINTLN(" sensors.");
+    // Make the library work in async mode
+    sensors.setWaitForConversion(false);
+    // Update the class buffer for temperature variables
+    sensors.requestTemperatures();
+    // Get the current temperature
+    RefreshedTemp1 = sensors.getTempCByIndex(0);
+  
 
     // Setup flow rate timer
     timerSemaphore = xSemaphoreCreateBinary();
@@ -133,18 +136,17 @@ void setup(void)
     timerAttachInterrupt(timer, &calculateFlowRate, true);
     timerAlarmWrite(timer, 1000000, true);
     
-
     // Set up lcd timer
     timer2Semaphore = xSemaphoreCreateBinary();
     timer2 = timerBegin(1, 80, true);
     timerAttachInterrupt(timer2, &updateLcd, true);
-    timerAlarmWrite(timer2, 500000, true);
+    timerAlarmWrite(timer2, 2000000, true);
 
     // Set up temperature
     timer3Semaphore = xSemaphoreCreateBinary();
     timer3 = timerBegin(2, 80, true);
     timerAttachInterrupt(timer3, &calculateTemperatures, true);
-    timerAlarmWrite(timer3, 200000, true);
+    timerAlarmWrite(timer3, 150000, true);
 
     timerAlarmEnable(timer);
     timerAlarmEnable(timer2);
@@ -529,8 +531,12 @@ void IRAM_ATTR updateLcd()
 
           // Update temperature
           portENTER_CRITICAL_ISR(&timer3Mux);
-            double temperature = RefreshedTemp1;
-            updateTemperature(String(temperature));
+            // Caluclate the temperature from the class buffer
+            double currentTemp = sensors.getTempCByIndex(0);
+            // Save the temperature to the global variabel
+            RefreshedTemp1 = currentTemp;
+            // Update the lcd display
+            updateTemperature(String(currentTemp));
           portEXIT_CRITICAL_ISR(&timer3Mux);
       portEXIT_CRITICAL_ISR(&timer2Mux);
 
@@ -541,9 +547,8 @@ void IRAM_ATTR updateLcd()
 void IRAM_ATTR calculateTemperatures()
 {
     portENTER_CRITICAL_ISR(&timer3Mux);
-       //sensors.requestTemperatures();
-       //RefreshedTemp1 = (double) sensors.getTempCByIndex(0);
-      RefreshedTemp1 = (double) 200;
+        // Request for new temperature information 
+        sensors.requestTemperatures();
     portEXIT_CRITICAL_ISR(&timer3Mux);
     xSemaphoreGiveFromISR(timer3Semaphore, NULL);
 }
