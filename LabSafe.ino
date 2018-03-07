@@ -22,7 +22,7 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 //Assign Device Address ->for more than one you need unique address
 DeviceAddress Temp1Address;
-float RefreshedTemp1;
+double RefreshedTemp1;
 
 float InitialTemp1;
 float Temp1Set;
@@ -33,6 +33,10 @@ float Temp1Max;
 hw_timer_t * timer = NULL;
 volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+
+hw_timer_t * timer2 = NULL;
+volatile SemaphoreHandle_t timer2Semaphore;
+portMUX_TYPE timer2Mux = portMUX_INITIALIZER_UNLOCKED;
 
 // FLOW
 volatile double FlowRate = 0;
@@ -119,11 +123,11 @@ void setup(void)
     timerAlarmEnable(timer);
 
     // Set Up temperature timer
-    timerSemaphore = xSemaphoreCreateBinary();
-    timer = timerBegin(0, 80, true);
-    timerAttachInterrupt(timer, &calculateTemp, true);
-    timerAlarmWrite(timer, 1000000, true);
-    timerAlarmEnable(timer);
+    timer2Semaphore = xSemaphoreCreateBinary();
+    timer2 = timerBegin(1, 80, true);
+    timerAttachInterrupt(timer2, &calculateTemp, true);
+    timerAlarmWrite(timer2, 1500000, true);
+    timerAlarmEnable(timer2);
 
     // LED's and Siren
     //Set pin mode
@@ -286,22 +290,27 @@ void loop()
 
             // TEMPERATURE:
             // Reading Temperature
-            DEBUG_APP_PRINTLN("Reading Temperature... ");
-            sensors.requestTemperatures();
-            DEBUG_APP_PRINT("Read ");
+//            DEBUG_APP_PRINTLN("Reading Temperature... ");
+//            sensors.requestTemperatures();
+//            DEBUG_APP_PRINT("Read ");
 
-            // Printing Read Temperature
-            DEBUG_APP_PRINTLN("Temperature 1 is: ");
-            DEBUG_APP_PRINT(sensors.getTempCByIndex(0));
-
-            // Read Temperature
-            InitialTemp1 = sensors.getTempCByIndex(0);
-            DEBUG_APP_PRINTLN("Temperature 1 Read is: ");
-            DEBUG_APP_PRINT(InitialTemp1);
-            DEBUG_APP_PRINTLN();
+//            // Printing Read Temperature
+//            DEBUG_APP_PRINTLN("Temperature 1 is: ");
+//            DEBUG_APP_PRINT(sensors.getTempCByIndex(0));
+//
+//            // Read Temperature
+//            InitialTemp1 = sensors.getTempCByIndex(0);
+//            DEBUG_APP_PRINTLN("Temperature 1 Read is: ");
+//            DEBUG_APP_PRINT(InitialTemp1);
+//            DEBUG_APP_PRINTLN();
 
             // Set Temperature
-            Temp1Set = InitialTemp1;
+            
+  
+              portENTER_CRITICAL_ISR(&timer2Mux);
+                  Temp1Set = (float) RefreshedTemp1;
+              portEXIT_CRITICAL_ISR(&timer2Mux);
+            
             Serial.print("Set Temperature is: ");
             Serial.print(Temp1Set);
             Serial.println();
@@ -338,22 +347,26 @@ void loop()
                 //float RefreshedTemp1;
 
                 // Reading and Printing Temp every Refresh rate
-                sensors.requestTemperatures();
-                RefreshedTemp1 = sensors.getTempCByIndex(0);
-                Serial.print("Current Temp 1 is: ");
-                Serial.print(RefreshedTemp1);
-                Serial.println();
+//                sensors.requestTemperatures();
+//                RefreshedTemp1 = sensors.getTempCByIndex(0);
+//                Serial.print("Current Temp 1 is: ");
+//                Serial.print(RefreshedTemp1);
+//                Serial.println();
+
+                portENTER_CRITICAL_ISR(&timer2Mux);
+                  float temperature = (float) RefreshedTemp1;
+                portEXIT_CRITICAL_ISR(&timer2Mux);
 
                 // Checking if temp is within min/max
-                if  ((RefreshedTemp1 < Temp1Min) || (RefreshedTemp1 > Temp1Max))
+                if  ((temperature < Temp1Min) || (temperature > Temp1Max))
                 {
                     errorEvent();
                 }
 
                 //READ FLOW
                 portENTER_CRITICAL(&timerMux);
-                unsigned long tempLastTime = lastFlowRateSample;
-                float tempFlowRate = (float) FlowRate;
+                  unsigned long tempLastTime = lastFlowRateSample;
+                  float tempFlowRate = (float) FlowRate;
                 portEXIT_CRITICAL(&timerMux);
                 Serial.print("Current Flow is: ");
                 Serial.print(tempFlowRate);
@@ -487,21 +500,21 @@ void flowSensorHandler()
 void IRAM_ATTR calculateFlowRate()
 {
     portENTER_CRITICAL_ISR(&timerMux);
-    // The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
-    double flowUnformatted = ((1000.0 / (millis() - lastFlowRateSample)) * flowSensorCount) / 4.5;
-    flowSensorCount = 0;
-    lastFlowRateSample = millis();
-    FlowRate = (flowUnformatted / 60) * 1000;
+      // The hall-effect flow sensor outputs approximately 4.5 pulses per second per litre/minute of flow.
+      double flowUnformatted = ((1000.0 / (millis() - lastFlowRateSample)) * flowSensorCount) / 4.5;
+      flowSensorCount = 0;
+      lastFlowRateSample = millis();
+      FlowRate = (flowUnformatted / 60) * 1000;
     portEXIT_CRITICAL_ISR(&timerMux);
     xSemaphoreGiveFromISR(timerSemaphore, NULL);
 }
 
 void IRAM_ATTR calculateTemp()
 {
-    portENTER_CRITICAL_ISR(&timerMux);
-//    sensors.requestTemperatures();
-//    RefreshedTemp1 = sensors.getTempCByIndex(0);
-    portEXIT_CRITICAL_ISR(&timerMux);
-    xSemaphoreGiveFromISR(timerSemaphore, NULL);
+    portENTER_CRITICAL_ISR(&timer2Mux);
+      sensors.requestTemperatures();
+      RefreshedTemp1 = sensors.getTempCByIndex(0);
+    portEXIT_CRITICAL_ISR(&timer2Mux);
+    xSemaphoreGiveFromISR(timer2Semaphore, NULL);
 }
 
