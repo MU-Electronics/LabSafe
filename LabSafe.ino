@@ -96,6 +96,14 @@ int Siren = 12;
 
 #include <SoftwareSerial.h>
 SoftwareSerial swSer(18, 19, false, 256);
+
+
+// Buffer for flow and temperature
+#include <vector>
+using namespace std;
+vector<double> temperatureContainer;
+
+
 /**
  * Setup program
  */
@@ -122,13 +130,13 @@ void setup(void)
     DEBUG_APP_PRINT("Found ");
     DEBUG_APP_PRINT(sensors.getDeviceCount(), DEC);
     DEBUG_APP_PRINTLN(" sensors.");
-    // Make the library work in async mode
-    sensors.setWaitForConversion(false);
     // Update the class buffer for temperature variables
     sensors.requestTemperatures();
     // Get the current temperature
-    RefreshedTemp1 = sensors.getTempCByIndex(0);
-  
+    for(int i=0; i<5; i++)
+      getTemperature();
+    // Make the library work in async mode
+    sensors.setWaitForConversion(false);
 
     // Setup flow rate timer
     timerSemaphore = xSemaphoreCreateBinary();
@@ -237,9 +245,7 @@ bool flashLEDState = true;
  */
 void loop()
 {
-    // updateFlowRate(String(FlowRate));
-    
-    
+  
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
 
         // Read the current state of the button
@@ -354,8 +360,7 @@ void loop()
 
         while (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) < 2000) && ((currentTime - firstPress) > 500))
         {
-          // updateFlowRate(String(FlowRate));
-          
+                    
             if ((millis() - LastRefresh) > RefreshRate)
             {
                 //float RefreshedTemp1;
@@ -415,7 +420,7 @@ void errorEvent()
     ledcWrite(3, 128); // Turn siren on
 
     // If temperature is out of tolerance SEND SMS
-    //fona.sendSMS(PhoneNo, "An error has occured");
+    fona.sendSMS(PhoneNo, "An error has occured");
 
     // Flash LED & Buzzer
     unsigned long flashError = 0;
@@ -427,9 +432,6 @@ void errorEvent()
 
     while (errorState)
     {
-        // updateFlowRate(String(FlowRate));
-        
-        
         // Read button
         buttonState = digitalRead(button);
 
@@ -503,6 +505,30 @@ void updateTemperature(String value)
 }
 
 
+/**
+ * Gets the new temperature value, adds to container, 
+ * 
+ * @return double 
+ *          average of the container
+ */
+double getTemperature()
+{
+    // Remove value if size is 5+
+    if(temperatureContainer.size() >= 5)
+        temperatureContainer.erase(temperatureContainer.begin());
+
+    // Add value to container
+    temperatureContainer.push_back(sensors.getTempCByIndex(0));
+
+    // Create a container total value
+    double average = 0;
+    for(auto x:temperatureContainer)
+        average += x;
+
+    // Return the average of the five previous results    
+    return (average / 5);
+}
+
 
 /**
  * Increments the counter for the flow sensor
@@ -522,6 +548,7 @@ void flowSensorHandler()
 
 void IRAM_ATTR updateLcd()
 {
+      noInterrupts();
       portENTER_CRITICAL_ISR(&timer2Mux);
           // Update flow rate
           portENTER_CRITICAL_ISR(&timerMux);
@@ -532,14 +559,14 @@ void IRAM_ATTR updateLcd()
           // Update temperature
           portENTER_CRITICAL_ISR(&timer3Mux);
             // Caluclate the temperature from the class buffer
-            double currentTemp = sensors.getTempCByIndex(0);
+            double currentTemp = getTemperature();
             // Save the temperature to the global variabel
             RefreshedTemp1 = currentTemp;
             // Update the lcd display
             updateTemperature(String(currentTemp));
           portEXIT_CRITICAL_ISR(&timer3Mux);
       portEXIT_CRITICAL_ISR(&timer2Mux);
-
+     interrupts();
   xSemaphoreGiveFromISR(timer2Semaphore, NULL);
 }
 
