@@ -415,10 +415,9 @@ void errorEvent()
     char sendto[number.length()+1];
     number.toCharArray(sendto, number.length()+1);
 
-
     ledcWrite(0, 0); // Turn Blue LED off
     ledcWrite(2, 128); // Flash 2 Red LEDs/ Vibrate
-    //ledcWrite(3, 128); // Turn siren on
+    ledcWrite(3, 128); // Turn siren on
 
     // IfSa temperature is out of tolerance SEND SMS
     noInterrupts();
@@ -426,8 +425,8 @@ void errorEvent()
     DEBUG_APP_PRINTLN(fona.getRSSI());
     DEBUG_APP_PRINT("Network Status: ");
     DEBUG_APP_PRINTLN(fona.getNetworkStatus());
-    fona.sendSMS(sendto, "An error has occured");
-    //delete sendto;
+    if(!fona.sendSMS(sendto, "An error has occured"))
+        DEBUG_APP_PRINTLN("Could not send sms");
     interrupts();
     
     // Flash LED & Buzzer
@@ -469,14 +468,14 @@ void errorEvent()
             if (flashErrorState)
             {
                 ledcWrite(2, 0);
-                //ledcSetup(3, 3100, 8);
-                //ledcWrite(3, 128);
+                ledcSetup(3, 3100, 8);
+                ledcWrite(3, 128);
             }
             else
             {
                 ledcWrite(2, 128);
-                //ledcSetup(3, 1000, 8);
-               // ledcWrite(3, 128);
+                ledcSetup(3, 1000, 8);
+                ledcWrite(3, 128);
             }
 
             // Save current state of LED
