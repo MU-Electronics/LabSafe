@@ -62,7 +62,7 @@ float FlowRateMax;
 // Set reset pin
 #define FONA_RST 25
 // PhoneNumber to send SMS message
-#define PhoneNo "07745139107"
+String number = "+447745139107";
 // Harware serial to communicate with simcom
 HardwareSerial Serial2(2);
 HardwareSerial *fonaSerial = &Serial2;
@@ -102,7 +102,7 @@ SoftwareSerial swSer(18, 19, false, 256);
 #include <vector>
 using namespace std;
 vector<double> temperatureContainer;
-
+vector<double> flowContainer;
 
 /**
  * Setup program
@@ -137,6 +137,7 @@ void setup(void)
       getTemperature();
     // Make the library work in async mode
     sensors.setWaitForConversion(false);
+    
 
     // Setup flow rate timer
     timerSemaphore = xSemaphoreCreateBinary();
@@ -336,8 +337,8 @@ void loop()
             Serial.println();
 
             // Set Tolerance
-            Temp1Min = Temp1Set - 6;
-            Temp1Max = Temp1Set + 6;
+            Temp1Min = Temp1Set - 3;
+            Temp1Max = Temp1Set + 3;
             Serial.print("Temperature 1 min is: ");
             Serial.print(Temp1Min);
             Serial.println();
@@ -410,18 +411,25 @@ void loop()
 
 void errorEvent()
 {
-    Serial.println();
-    Serial.print("error");
-    Serial.println();
+    // Convert number to required type
+    char sendto[number.length()+1];
+    number.toCharArray(sendto, number.length()+1);
 
 
     ledcWrite(0, 0); // Turn Blue LED off
     ledcWrite(2, 128); // Flash 2 Red LEDs/ Vibrate
-    ledcWrite(3, 128); // Turn siren on
+    //ledcWrite(3, 128); // Turn siren on
 
-    // If temperature is out of tolerance SEND SMS
-    fona.sendSMS(PhoneNo, "An error has occured");
-
+    // IfSa temperature is out of tolerance SEND SMS
+    noInterrupts();
+    DEBUG_APP_PRINT("Signal Strength: ");
+    DEBUG_APP_PRINTLN(fona.getRSSI());
+    DEBUG_APP_PRINT("Network Status: ");
+    DEBUG_APP_PRINTLN(fona.getNetworkStatus());
+    fona.sendSMS(sendto, "An error has occured");
+    //delete sendto;
+    interrupts();
+    
     // Flash LED & Buzzer
     unsigned long flashError = 0;
     bool flashErrorState = true;
@@ -461,14 +469,14 @@ void errorEvent()
             if (flashErrorState)
             {
                 ledcWrite(2, 0);
-                ledcSetup(3, 3100, 8);
-                ledcWrite(3, 128);
+                //ledcSetup(3, 3100, 8);
+                //ledcWrite(3, 128);
             }
             else
             {
                 ledcWrite(2, 128);
-                ledcSetup(3, 1000, 8);
-                ledcWrite(3, 128);
+                //ledcSetup(3, 1000, 8);
+               // ledcWrite(3, 128);
             }
 
             // Save current state of LED
@@ -504,7 +512,25 @@ void updateTemperature(String value)
     swSer.write(0xff);
 }
 
+double getFlow()
+{
+  double flow = FlowRate;
+    // Remove value if size is 5+
+    if(flowContainer.size() >= 5)
+        flowContainer.erase(flowContainer.begin());
 
+    // add value to container
+    flowContainer.push_back(flow);
+
+    // Calculate container value
+    double Total = 0;
+    for(auto x:flowContainer)
+      Total+= x;
+
+    // Divide total by 5 to give average
+    return (Total/5);
+    
+}
 /**
  * Gets the new temperature value, adds to container, 
  * 
@@ -514,7 +540,7 @@ void updateTemperature(String value)
 double getTemperature()
 {
     // Remove value if size is 5+
-    if(temperatureContainer.size() >= 5)
+    if(temperatureContainer.size() >= 3)
         temperatureContainer.erase(temperatureContainer.begin());
 
     // Add value to container
@@ -526,7 +552,7 @@ double getTemperature()
         average += x;
 
     // Return the average of the five previous results    
-    return (average / 5);
+    return (average / 3);
 }
 
 
@@ -552,7 +578,7 @@ void IRAM_ATTR updateLcd()
       portENTER_CRITICAL_ISR(&timer2Mux);
           // Update flow rate
           portENTER_CRITICAL_ISR(&timerMux);
-            double flowRate = FlowRate;
+            double flowRate = getFlow();
             updateFlowRate(String(flowRate));
           portEXIT_CRITICAL_ISR(&timerMux);
 

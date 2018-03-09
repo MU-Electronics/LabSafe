@@ -1,6 +1,6 @@
 #pragma once
 
-// #define DEBUG_APP
+#define DEBUG_APP
 
 	#ifdef DEBUG_APP
 		#define DEBUG_APP_PRINT(...) Serial.print(__VA_ARGS__)
