@@ -1,17 +1,26 @@
-// Import librarys
-// Utilities
+// Utility macros
 #include "DebugUtils.h"
 
-// Temperture
+// Vector library
+#include <vector>
+
+// I2C library
 #include <OneWire.h>
+
+// Temperture library
 #include <DallasTemperature.h>
 
-// SMS
+// Software serial library
+#include <SoftwareSerial.h>
+
+// Simcom 808 library
 #include "Adafruit_FONA.h"
 
 
-// TEMPERATURE
-//Temperature Data Wire plugged into 1022 (I2C SCL - Pin 36)
+// Setup software serial for lcd 
+SoftwareSerial swSer(18, 19, false, 256);
+
+// Setup temperature library
 #define ONE_WIRE_BUS 22
 //Setup to communicate with any OneWire Devices
 OneWire oneWire(ONE_WIRE_BUS);
@@ -19,29 +28,33 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 volatile double RefreshedTemp1;
 
+// Define global variables for experiment tolerances
 float InitialTemp1;
 float Temp1Set;
 float Temp1Min;
 float Temp1Max;
+float SetFlowRate;
+float FlowRateMin;
+float FlowRateMax;
 
-// Second timer
+// Setup timer & misc for flow
 hw_timer_t * timer = NULL;
 volatile SemaphoreHandle_t timerSemaphore;
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
 
-// LCD
+// Setup LCD & misc for flow
 hw_timer_t * timer2 = NULL;
 volatile SemaphoreHandle_t timer2Semaphore;
 portMUX_TYPE timer2Mux = portMUX_INITIALIZER_UNLOCKED;
 
-// Temperature
+// Setup temperature & misc for flow
 hw_timer_t * timer3 = NULL;
 volatile SemaphoreHandle_t timer3Semaphore;
 portMUX_TYPE timer3Mux = portMUX_INITIALIZER_UNLOCKED;
 
-// FLOW
+// Save the calculated flow rate
 volatile double FlowRate = 0;
-// Flow sensor input IO35 (GPIO_35 - Pin 7)
+// Where is the sensor connected to?
 byte sensorInterrupt = 35;
 // Total pulse count
 volatile byte flowSensorCount;
@@ -51,15 +64,9 @@ volatile unsigned long lastFlowRateSample = millis();
 // Calculated info on flow rate
 float InitialFlowRate;
 unsigned int InitialFlowMilliLitres;
-//unsigned long totalMilliLitres;
 
 
-float SetFlowRate;
-float FlowRateMin;
-float FlowRateMax;
-
-// SMS
-// Set reset pin
+// Set reset pin for sim com
 #define FONA_RST 25
 // PhoneNumber to send SMS message
 String number = "+447745139107";
@@ -68,18 +75,10 @@ HardwareSerial Serial2(2);
 HardwareSerial *fonaSerial = &Serial2;
 // set the simcom reset pins with the fona instance
 Adafruit_FONA fona = Adafruit_FONA (FONA_RST);
-// Create a buffer to store the text messages
-char replybuffer[255];
-// Declare the read text message function
-uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
-// Notifications from the FONA library
-char fonaInBuffer[64];
-
 
 // OTHER
 unsigned long RefreshRate;
 unsigned long LastRefresh;
-
 
 // Button
 int button = 4;
@@ -93,27 +92,54 @@ int LEDRed = 33;
 int LEDBlue = 27;
 int LEDRed2 = 32;
 int Siren = 12;
-
-#include <SoftwareSerial.h>
-SoftwareSerial swSer(18, 19, false, 256);
+unsigned long flashLED = 0;
+bool flashLEDState = true;
 
 
 // Buffer for flow and temperature
-#include <vector>
 using namespace std;
 vector<double> temperatureContainer;
 vector<double> flowContainer;
+
 
 /**
  * Setup program
  */
 void setup(void)
 {
+    //Set pin mode for leds, siren and vibrator
+    pinMode(LEDRed, OUTPUT);
+    pinMode(LEDBlue, OUTPUT);
+    pinMode(LEDRed2, OUTPUT);
+    pinMode(Siren, OUTPUT);
+
+    // Turn Red LED on pwm
+    ledcSetup(1, 10000, 8); // PWM Channel, base frequency, resolution
+    ledcAttachPin(LEDRed, 1); // GPIO Pin, PWM Channel
+    ledcWrite(1, 20);
+
+    // Initially flash the blue LED pwm
+    ledcSetup(0, 10000, 8); // PWM Channel, base frequency, resolution
+    ledcAttachPin(LEDBlue, 0); // GPIO Pin, PWM Channel
+    ledcWrite(0, 128); // PWM Channel, Duty Cycle
+
+    // Set up 2 Red LEDs and vibrator pwm
+    ledcSetup(2, 10000, 8);
+    ledcAttachPin(LEDRed2, 2);
+    ledcWrite(2, 0);
+
+    // Set up Siren pwm
+    ledcSetup(3, 3100, 8); // (Timer Channel, Base Frequency, Resolution)
+    ledcAttachPin(12, 3);   // (Pin, Timer Channel)
+    ledcWrite(3, 0); // Turn siren    
+
     delay(2000);
 
     // Start lcd serial
     swSer.begin(9600);
-    
+
+
+    // Tell the user to wait
     updateFlowRate("Wait");
     updateTemperature("Wait");
       
@@ -122,6 +148,7 @@ void setup(void)
     Serial.begin(115200);
     Serial.println();
     Serial.println("Kerris Labsafe Version 1");
+
 
     // Setup the temperature sensor library
     sensors.begin();
@@ -132,7 +159,7 @@ void setup(void)
     DEBUG_APP_PRINTLN(" sensors.");
     // Update the class buffer for temperature variables
     sensors.requestTemperatures();
-    // Get the current temperature
+    // Get and fill the current temperature into the buffer container
     for(int i=0; i<5; i++)
       getTemperature();
     // Make the library work in async mode
@@ -151,64 +178,51 @@ void setup(void)
     timerAttachInterrupt(timer2, &updateLcd, true);
     timerAlarmWrite(timer2, 2000000, true);
 
-    // Set up temperature
+    // Set up temperature timer
     timer3Semaphore = xSemaphoreCreateBinary();
     timer3 = timerBegin(2, 80, true);
     timerAttachInterrupt(timer3, &calculateTemperatures, true);
-    timerAlarmWrite(timer3, 150000, true);
+    timerAlarmWrite(timer3, 1500000, true);
 
+    // Enable all our hardware timers
     timerAlarmEnable(timer);
     timerAlarmEnable(timer2);
     timerAlarmEnable(timer3);
 
-    // LED's and Siren
-    //Set pin mode
-    pinMode(LEDRed, OUTPUT);
-    pinMode(LEDBlue, OUTPUT);
-    pinMode(LEDRed2, OUTPUT);
-    pinMode(Siren, OUTPUT);
-
-    // Turn Red LED on
-    ledcSetup(1, 10000, 8); // PWM Channel, base frequency, resolution
-    ledcAttachPin(LEDRed, 1); // GPIO Pin, PWM Channel
-    ledcWrite(1, 20);
-
-    // Initially flash the blue LED
-    ledcSetup(0, 10000, 8); // PWM Channel, base frequency, resolution
-    ledcAttachPin(LEDBlue, 0); // GPIO Pin, PWM Channel
-    ledcWrite(0, 128); // PWM Channel, Duty Cycle
-
-    // Set up 2 Red LEDs and vibrator
-    ledcSetup(2, 10000, 8);
-    ledcAttachPin(LEDRed2, 2);
-    ledcWrite(2, 0);
-
-    // Set up Siren
-    ledcSetup(3, 3100, 8); // (Timer Channel, Base Frequency, Resolution)
-    ledcAttachPin(12, 3);   // (Pin, Timer Channel)
-    ledcWrite(3, 0); // Turn siren    
-
-    // FLOW
-    // Set up the flow controller input
+    // Set up the flow sensor to an input
     pinMode(sensorInterrupt, INPUT);
 
     // Default the variables
     InitialFlowRate = 0.0;
     InitialFlowMilliLitres = 0;
 
-
-    // Setup interrupt and attach a handling function
+    // Setup interrupt and attach a handling function for the flow sensor pulses
     attachInterrupt(digitalPinToInterrupt(sensorInterrupt), flowSensorHandler, FALLING);
 
-    // SMS
     // Setup the fona / simcom 808 serial inerface
     fonaSerial->begin(9600); //4800
 
     // If the serial interface failed state that it did
     if (!fona.begin(*fonaSerial))
     {
-        DEBUG_APP_PRINTLN(F("Couldn't find SIMCOM808"));
-        while (1);
+        // Delay
+        delay(500);
+      
+        // Flush buffer
+        while(fonaSerial->available())
+        {
+            fonaSerial->read();
+        }
+
+        // Wait for a while
+        delay(1000);
+
+        // Try connecting one more time
+        if (!fona.begin(*fonaSerial))
+        {
+            DEBUG_APP_PRINTLN(F("Couldn't find SIMCOM808"));
+            while (1);
+        }
     }
 
     // State everything went ok
@@ -220,33 +234,30 @@ void setup(void)
     // Delete message in slot 1 to make sure there is always space
     fona.deleteSMS(1);
 
-    // State that the SIMCOM is now setup and we're moving to the main program loop
-    DEBUG_APP_PRINTLN("SIMCOM808 Ready");
-
     // OTHER
     RefreshRate = 5000; //5 seconds for not just for test
     LastRefresh = 0;
-
-    // Button
+    
     // Set button pin to input with internal pullup
     pinMode(button, INPUT_PULLUP);
 
-    delay(1000); // wait to settle
+    // Settling time
+    delay(1000);
 
+    // State the lab safe is ready
     Serial.println("LabSafe Ready");
 }
 
-unsigned long flashLED = 0;
-bool flashLEDState = true;
+
 
 
 
 /**
- * Runs program
+ * Runs main program
  */
 void loop()
 {
-  
+    // Make sure the flow sensors has been read at least one
     if (xSemaphoreTake(timerSemaphore, 0) == pdTRUE) {
 
         // Read the current state of the button
@@ -256,7 +267,7 @@ void loop()
         unsigned long currentTime = millis();
 
         // Flash LED every second
-        if (currentTime - flashLED > 1000)
+        if (currentTime - flashLED > 100)
         {
             // Cycle LED
             (flashLEDState) ? ledcWrite(0, 0) : ledcWrite(0, 10) ;
@@ -267,21 +278,22 @@ void loop()
         }
 
       
-        // Check to see if the any press conditions match
+        // Set the first time the button is held down
+        // Which can then be used to calculate the total time
+        // The button has been held down
         if (buttonState == LOW && firstPress == -1)
         {
             // Detect the inital press
             DEBUG_APP_PRINTLN("Initial press");
 
-
             // Set the first time press value
             firstPress = currentTime;
         }
-        // On button click less than 2 AND greater than 0.5
+        
+        
+        // Start the experiment and set tolerances
         if (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) < 2000) && ((currentTime - firstPress) > 500))
         {
-
-            
             // Detect a short press
             DEBUG_APP_PRINTLN("Short press");
 
@@ -309,25 +321,8 @@ void loop()
             Serial.print("ml/Sec");
             Serial.println();
 
-            // TEMPERATURE:
-            // Reading Temperature
-//            DEBUG_APP_PRINTLN("Reading Temperature... ");
-//            sensors.requestTemperatures();
-//            DEBUG_APP_PRINT("Read ");
-
-//            // Printing Read Temperature
-//            DEBUG_APP_PRINTLN("Temperature 1 is: ");
-//            DEBUG_APP_PRINT(sensors.getTempCByIndex(0));
-//
-//            // Read Temperature
-//            InitialTemp1 = sensors.getTempCByIndex(0);
-//            DEBUG_APP_PRINTLN("Temperature 1 Read is: ");
-//            DEBUG_APP_PRINT(InitialTemp1);
-//            DEBUG_APP_PRINTLN();
 
             // Set Temperature
-            
-  
               portENTER_CRITICAL_ISR(&timerMux);
                   Temp1Set = (float) RefreshedTemp1;
               portEXIT_CRITICAL_ISR(&timerMux);
@@ -347,32 +342,13 @@ void loop()
             Serial.println();
 
         }
-        else if (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) > 5000))
-        {
-            // Detect a long press 10sec
-            DEBUG_APP_PRINTLN("Long press");
-            DEBUG_APP_PRINTLN();
-            Serial.println("Resetting Microcontroller");
 
-            // Reboot the ESP
-            ESP.restart();
-        }
-
-
-        while (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) < 2000) && ((currentTime - firstPress) > 500))
+        // Check experiment within tolerance
+        while (buttonState == HIGH && firstPress != -1 && ((currentTime - firstPress) < 2000) && ((currentTime - firstPress) > 250))
         {
                     
             if ((millis() - LastRefresh) > RefreshRate)
             {
-                //float RefreshedTemp1;
-
-                // Reading and Printing Temp every Refresh rate
-//                sensors.requestTemperatures();
-//                RefreshedTemp1 = sensors.getTempCByIndex(0);
-//                Serial.print("Current Temp 1 is: ");
-//                Serial.print(RefreshedTemp1);
-//                Serial.println();
-
                 portENTER_CRITICAL_ISR(&timerMux);
                   float temperature = (float) RefreshedTemp1;
                 portEXIT_CRITICAL_ISR(&timerMux);
@@ -409,6 +385,9 @@ void loop()
 }
 
 
+/**
+ * Runs when an error has occured
+ */
 void errorEvent()
 {
     // Convert number to required type
@@ -417,7 +396,7 @@ void errorEvent()
 
     ledcWrite(0, 0); // Turn Blue LED off
     ledcWrite(2, 128); // Flash 2 Red LEDs/ Vibrate
-    ledcWrite(3, 128); // Turn siren on
+    //ledcWrite(3, 128); // Turn siren on
 
     // IfSa temperature is out of tolerance SEND SMS
     noInterrupts();
@@ -453,10 +432,16 @@ void errorEvent()
             firstErrorAccept = -1;
         }
 
-        if (buttonState == LOW && ((millis() - firstErrorAccept) > 5000))
+        if (buttonState == LOW && ((millis() - firstErrorAccept) > 2000))
         {
+            // Turn off siren & leds
+            ledcWrite(3, 0);
+            ledcWrite(2, 0);
+            
             // Reboot the ESP
-            ESP.restart();
+            // ESP.restart();
+            firstPress = -1;
+            break;
 
             errorState = false;
         }
@@ -484,9 +469,15 @@ void errorEvent()
             flashError = millis();
         }
     }
+
+    // Wait for finger to be removed
+    delay(3000);
 }
 
 
+/**
+ * Update lcd flow rate variable
+ */
 void updateFlowRate(String value)
 {
     swSer.write(0xff);
@@ -499,6 +490,10 @@ void updateFlowRate(String value)
     swSer.write(0xff);
 }
 
+
+/**
+ * Update lcd temperature variable
+ */
 void updateTemperature(String value)
 {
     swSer.write(0xff);
@@ -511,6 +506,12 @@ void updateTemperature(String value)
     swSer.write(0xff);
 }
 
+/**
+ * Gets the current flow rates and adds to container 
+ * 
+ * @return 
+ *    The container avaerage
+ */
 double getFlow()
 {
   double flow = FlowRate;
